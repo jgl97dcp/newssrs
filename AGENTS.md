@@ -91,6 +91,60 @@ We proceeded anyway for **development/testing purposes only**.
 - Documented Session 1 based on user recollection and file analysis
 - User has a new goal for today (to be discussed)
 
+### Session 3: 2026-08-28 (Pivot: Containers → VM)
+
+**Goal:** Abandon SSRS containerization, run SSRS in a VirtualBox VM using official Microsoft installers instead.
+
+**Key decisions:**
+- **Host/hypervisor:** Ubuntu 22.04 + VirtualBox 7.1.18 (already installed, VT-x on i9-11900K, 32GB RAM)
+- **Guest OS:** Windows Server 2022 Evaluation ISO (180-day eval)
+  - Originally planned pre-built "Windows 11 Dev VM" but **confirmed retired by Microsoft** (`developer.microsoft.com/windows/downloads/virtual-machines/` now redirects to `learn.microsoft.com/windows/dev-environment/`)
+  - Server 2022 chosen over Win11 Enterprise Eval because: longer eval (180 vs 90 days), no TPM 2.0 requirement (easier in VBox), closer match to prod SSRS topology
+- **SQL Server:** 2022 Developer edition (free, full features)
+- **SSRS:** SQL Server 2022 Reporting Services standalone installer (`SQLServerReportingServices.exe`)
+- **Rationale for VM over containers:** SSRS containerization is unsupported; official MS installers only exist for Windows guest OS; VM lets us use them cleanly.
+
+**Deliverables produced this session:**
+- `scripts/create-vm.sh` — provisions VBox VM `ssrs-dev-vm` (4 vCPU, 8GB RAM, 80GB dyn disk, UEFI, NAT with port forwards for RDP/HTTP/SQL)
+- `docs/ssrs-vm-setup.md` — full step-by-step install + config walkthrough
+
+**Port forwards (host → guest):**
+- RDP: `localhost:3389` → 3389
+- SSRS HTTP: `http://localhost:8080` → 80
+- SQL: `localhost,11433` → 1433
+
+**Next action:** User downloads Windows Server 2022 ISO from evalcenter, then runs `scripts/create-vm.sh`.
+
+### Session 4: 2026-08-29 (VM built + SSRS reachable from host)
+
+**Progress made:**
+- User downloaded Win Server 2022 Eval ISO and ran `scripts/create-vm.sh` successfully
+- VM `ssrs-dev-vm` created, Win Server 2022 (Desktop Experience) installed
+- SQL Server 2022 Developer installed inside VM (default `MSSQLSERVER` instance)
+- SSMS installed
+- SSRS 2022 standalone installed and configured via Report Server Configuration Manager:
+  - Web Service URL: `http://<host>:80/ReportServer` ✓
+  - `ReportServer` database created on `localhost` ✓
+  - Web Portal URL: `http://<host>:80/Reports` ✓
+
+**Issue hit & resolved: NAT forward returned timeouts from Ubuntu host**
+- Symptom: `curl http://localhost:8080/Reports` from Ubuntu — TCP connect OK, then timeout
+- Root cause: **Windows Defender Firewall in guest silently dropped inbound :80** (SSRS installer doesn't add a firewall rule)
+- Fix: In elevated PowerShell inside guest:
+  ```powershell
+  New-NetFirewallRule -DisplayName "SSRS HTTP (80)"   -Direction Inbound -Protocol TCP -LocalPort 80   -Action Allow
+  New-NetFirewallRule -DisplayName "SSRS HTTPS (443)" -Direction Inbound -Protocol TCP -LocalPort 443  -Action Allow
+  New-NetFirewallRule -DisplayName "SQL Server (1433)" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow
+  ```
+- After firewall fix, `curl` from Ubuntu returned `HTTP/1.1 401 Unauthorized` with `WWW-Authenticate: NTLM` — **confirmed SSRS is reachable end-to-end from host**
+
+**State at session end:**
+- SSRS Web Portal reachable at `http://localhost:8080/Reports` from Ubuntu host (auth required — NTLM)
+- SQL Server §10 steps **NOT YET DONE**: TCP/IP protocol not enabled, port not fixed at 1433, Mixed Mode auth not enabled, no `appuser` login created, `sqlcmd` from host not yet tested
+- No VM snapshot taken yet
+
+**Resume point:** See `README.md` "Resume here" section. Next step is §10 of `docs/ssrs-vm-setup.md` — enable SQL remote connectivity + create `appuser` login, verify with `sqlcmd -S localhost,11433` from Ubuntu, then snapshot.
+
 <!-- Add new sessions above this line -->
 
 ---
